@@ -46,11 +46,15 @@ export function PetProvider({
 
   useEffect(() => {
     const loaded = loadPetState(userId);
-    setState({
+    const initial: PetState = {
       ...loaded,
       mood: moodFromPetTimes(loaded.petTimes),
+    };
+    const id = requestAnimationFrame(() => {
+      setState(initial);
+      setReady(true);
     });
-    setReady(true);
+    return () => cancelAnimationFrame(id);
   }, [userId]);
 
   useEffect(() => {

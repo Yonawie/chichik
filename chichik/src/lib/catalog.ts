@@ -1,9 +1,5 @@
 import { cache } from "react";
 import { MVP_SUBJECT_CODES, MVP_SUBJECTS, subjectExamTypes } from "@/lib/constants";
-
-function looksMojibake(text: string): boolean {
-  return /Р§Рё|РџРѕРґ|РњР°С‚|Р СѓСЃ|РћР±С‰|РҐРёРј|С‚РµРѕСЂ/.test(text);
-}
 import {
   examTypeLabel,
   getSubject as getMockSubject,
@@ -15,8 +11,13 @@ import {
   type Subject,
   type Topic,
 } from "@/lib/mock-data";
+import { getSessionUser } from "@/lib/auth/profile";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
+
+function looksMojibake(text: string): boolean {
+  return /Р§Рё|РџРѕРґ|РњР°С‚|Р СѓСЃ|РћР±С‰|РҐРёРј|С‚РµРѕСЂ/.test(text);
+}
 
 export type CatalogSubject = Subject & { source: "db" | "mock" };
 
@@ -54,40 +55,66 @@ function previewFromMd(md: string): string {
   return line ?? "Теория по теме";
 }
 
+function mockGrouped(subjectCode: string) {
+  const grouped = getMockTopicsGrouped(subjectCode);
+  return {
+    oge: grouped.oge.map((t) => ({
+      ...t,
+      theoryMd: t.theoryPreview,
+      source: "mock" as const,
+    })),
+    ege: grouped.ege.map((t) => ({
+      ...t,
+      theoryMd: t.theoryPreview,
+      source: "mock" as const,
+    })),
+  };
+}
+
 export { examTypeLabel };
 
+/** Home catalog: subjects + topic counts. Mastery only for current user (one filtered query). */
 export const listSubjects = cache(async (): Promise<CatalogSubject[]> => {
   if (!isSupabaseConfigured()) {
     return mockSubjects.map((s) => ({ ...s, source: "mock" as const }));
   }
 
   try {
-    const supabase = await createClient();
-    const [{ data, error }, { data: topics }, { data: mastery }] = await Promise.all([
-      supabase
-        .from("subjects")
-        .select("code, title, short_description, emoji, sort_order")
-        .in("code", [...MVP_SUBJECT_CODES])
-        .order("sort_order"),
-      supabase
-        .from("topics")
-        .select("id, subject_code")
-        .in("subject_code", [...MVP_SUBJECT_CODES]),
-      supabase.from("topic_mastery").select("topic_id, mastery"),
-    ]);
+    const { supabase, user } = await getSessionUser();
+    const subjectsQuery = supabase
+      .from("subjects")
+      .select("code, title, short_description, emoji, sort_order")
+      .in("code", [...MVP_SUBJECT_CODES])
+      .order("sort_order");
+    const topicsQuery = supabase
+      .from("topics")
+      .select("id, subject_code")
+      .in("subject_code", [...MVP_SUBJECT_CODES]);
+
+    const [{ data, error }, { data: topics }] = await Promise.all([subjectsQuery, topicsQuery]);
 
     if (error || !data?.length) {
       return mockSubjects.map((s) => ({ ...s, source: "mock" as const }));
     }
 
     const topicIdsBySubject = new Map<string, string[]>();
+    const allTopicIds: string[] = [];
     for (const t of topics ?? []) {
       const list = topicIdsBySubject.get(t.subject_code) ?? [];
       list.push(t.id);
       topicIdsBySubject.set(t.subject_code, list);
+      allTopicIds.push(t.id);
     }
 
-    const masteryByTopic = new Map((mastery ?? []).map((m) => [m.topic_id, m.mastery]));
+    let masteryByTopic = new Map<string, number>();
+    if (user && allTopicIds.length > 0) {
+      const { data: mastery } = await supabase
+        .from("topic_mastery")
+        .select("topic_id, mastery")
+        .eq("user_id", user.id)
+        .in("topic_id", allTopicIds);
+      masteryByTopic = new Map((mastery ?? []).map((m) => [m.topic_id, m.mastery]));
+    }
 
     return data.map((row) => {
       const ids = topicIdsBySubject.get(row.code) ?? [];
@@ -127,101 +154,69 @@ export const listSubjects = cache(async (): Promise<CatalogSubject[]> => {
   }
 });
 
-export async function getCatalogSubject(code: string): Promise<CatalogSubject | null> {
+export const getCatalogSubject = cache(async (code: string): Promise<CatalogSubject | null> => {
   const all = await listSubjects();
   return all.find((s) => s.code === code) ?? null;
-}
+});
 
-export async function getTopicsGrouped(
-  subjectCode: string,
-): Promise<{ oge: CatalogTopic[]; ege: CatalogTopic[] }> {
-  if (!isSupabaseConfigured()) {
-    const grouped = getMockTopicsGrouped(subjectCode);
-    return {
-      oge: grouped.oge.map((t) => ({
-        ...t,
-        theoryMd: t.theoryPreview,
-        source: "mock" as const,
-      })),
-      ege: grouped.ege.map((t) => ({
-        ...t,
-        theoryMd: t.theoryPreview,
-        source: "mock" as const,
-      })),
-    };
-  }
+/** Topics for a subject, split into ОГЭ / ЕГЭ. Uses nested task counts (one query). */
+export const getTopicsGrouped = cache(
+  async (subjectCode: string): Promise<{ oge: CatalogTopic[]; ege: CatalogTopic[] }> => {
+    if (!isSupabaseConfigured()) {
+      return mockGrouped(subjectCode);
+    }
 
-  try {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("topics")
-      .select("id, subject_code, exam_type, title, theory_md, sort_order")
-      .eq("subject_code", subjectCode)
-      .order("sort_order");
+    try {
+      const { supabase, user } = await getSessionUser();
+      const { data, error } = await supabase
+        .from("topics")
+        .select("id, subject_code, exam_type, title, theory_md, sort_order, tasks(count)")
+        .eq("subject_code", subjectCode)
+        .order("sort_order");
 
-    if (error || !data?.length) {
-      const grouped = getMockTopicsGrouped(subjectCode);
+      if (error || !data?.length) {
+        return mockGrouped(subjectCode);
+      }
+
+      const topicIds = data.map((t) => t.id);
+      let masteryMap = new Map<string, number>();
+      if (user && topicIds.length > 0) {
+        const { data: masteryRows } = await supabase
+          .from("topic_mastery")
+          .select("topic_id, mastery")
+          .eq("user_id", user.id)
+          .in("topic_id", topicIds);
+        masteryMap = new Map((masteryRows ?? []).map((m) => [m.topic_id, m.mastery]));
+      }
+
+      const mapped: CatalogTopic[] = data.map((row) => {
+        const countRaw = row.tasks as { count: number }[] | null | undefined;
+        const tasksCount = Array.isArray(countRaw) ? (countRaw[0]?.count ?? 0) : 0;
+        return {
+          id: row.id,
+          subjectCode: row.subject_code,
+          examType: row.exam_type as ExamType,
+          title: row.title,
+          emoji: "📘",
+          theoryPreview: previewFromMd(row.theory_md || ""),
+          theoryMd: row.theory_md || "",
+          mastery: masteryMap.get(row.id) ?? 0,
+          tasksCount,
+          source: "db" as const,
+        };
+      });
+
       return {
-        oge: grouped.oge.map((t) => ({
-          ...t,
-          theoryMd: t.theoryPreview,
-          source: "mock" as const,
-        })),
-        ege: grouped.ege.map((t) => ({
-          ...t,
-          theoryMd: t.theoryPreview,
-          source: "mock" as const,
-        })),
+        oge: mapped.filter((t) => t.examType === "oge"),
+        ege: mapped.filter((t) => t.examType === "ege"),
       };
+    } catch {
+      return mockGrouped(subjectCode);
     }
+  },
+);
 
-    const topicIds = data.map((t) => t.id);
-    const [{ data: taskRows }, { data: masteryRows }] = await Promise.all([
-      supabase.from("tasks").select("id, topic_id").in("topic_id", topicIds),
-      supabase.from("topic_mastery").select("topic_id, mastery").in("topic_id", topicIds),
-    ]);
-
-    const taskCount = new Map<string, number>();
-    for (const t of taskRows ?? []) {
-      taskCount.set(t.topic_id, (taskCount.get(t.topic_id) ?? 0) + 1);
-    }
-    const masteryMap = new Map((masteryRows ?? []).map((m) => [m.topic_id, m.mastery]));
-
-    const mapped: CatalogTopic[] = data.map((row) => ({
-      id: row.id,
-      subjectCode: row.subject_code,
-      examType: row.exam_type as ExamType,
-      title: row.title,
-      emoji: "📘",
-      theoryPreview: previewFromMd(row.theory_md || ""),
-      theoryMd: row.theory_md || "",
-      mastery: masteryMap.get(row.id) ?? 0,
-      tasksCount: taskCount.get(row.id) ?? 0,
-      source: "db" as const,
-    }));
-
-    return {
-      oge: mapped.filter((t) => t.examType === "oge"),
-      ege: mapped.filter((t) => t.examType === "ege"),
-    };
-  } catch {
-    const grouped = getMockTopicsGrouped(subjectCode);
-    return {
-      oge: grouped.oge.map((t) => ({
-        ...t,
-        theoryMd: t.theoryPreview,
-        source: "mock" as const,
-      })),
-      ege: grouped.ege.map((t) => ({
-        ...t,
-        theoryMd: t.theoryPreview,
-        source: "mock" as const,
-      })),
-    };
-  }
-}
-
-export async function getCatalogTopic(topicId: string): Promise<CatalogTopic | null> {
+export const getCatalogTopic = cache(async (topicId: string): Promise<CatalogTopic | null> => {
   if (!isSupabaseConfigured()) {
     const t = getMockTopic(topicId);
     if (!t) return null;
@@ -229,10 +224,10 @@ export async function getCatalogTopic(topicId: string): Promise<CatalogTopic | n
   }
 
   try {
-    const supabase = await createClient();
+    const { supabase, user } = await getSessionUser();
     const { data, error } = await supabase
       .from("topics")
-      .select("id, subject_code, exam_type, title, theory_md, sort_order")
+      .select("id, subject_code, exam_type, title, theory_md, sort_order, tasks(count)")
       .eq("id", topicId)
       .maybeSingle();
 
@@ -242,17 +237,19 @@ export async function getCatalogTopic(topicId: string): Promise<CatalogTopic | n
       return { ...t, theoryMd: t.theoryPreview, source: "mock" };
     }
 
-    const [{ count }, { data: mastery }] = await Promise.all([
-      supabase
-        .from("tasks")
-        .select("id", { count: "exact", head: true })
-        .eq("topic_id", topicId),
-      supabase
+    let mastery = 0;
+    if (user) {
+      const { data: masteryRow } = await supabase
         .from("topic_mastery")
         .select("mastery")
+        .eq("user_id", user.id)
         .eq("topic_id", topicId)
-        .maybeSingle(),
-    ]);
+        .maybeSingle();
+      mastery = masteryRow?.mastery ?? 0;
+    }
+
+    const countRaw = data.tasks as { count: number }[] | null | undefined;
+    const tasksCount = Array.isArray(countRaw) ? (countRaw[0]?.count ?? 0) : 0;
 
     return {
       id: data.id,
@@ -262,8 +259,8 @@ export async function getCatalogTopic(topicId: string): Promise<CatalogTopic | n
       emoji: "📘",
       theoryPreview: previewFromMd(data.theory_md || ""),
       theoryMd: data.theory_md || "",
-      mastery: mastery?.mastery ?? 0,
-      tasksCount: count ?? 0,
+      mastery,
+      tasksCount,
       source: "db",
     };
   } catch {
@@ -271,9 +268,9 @@ export async function getCatalogTopic(topicId: string): Promise<CatalogTopic | n
     if (!t) return null;
     return { ...t, theoryMd: t.theoryPreview, source: "mock" };
   }
-}
+});
 
-export async function listTasksForTopic(topicId: string): Promise<CatalogTask[]> {
+export const listTasksForTopic = cache(async (topicId: string): Promise<CatalogTask[]> => {
   if (!isSupabaseConfigured()) {
     return sampleTasks
       .filter((t) => t.topicId === topicId)
@@ -327,7 +324,7 @@ export async function listTasksForTopic(topicId: string): Promise<CatalogTask[]>
   } catch {
     return [];
   }
-}
+});
 
 export function getMockSubjectFallback(code: string) {
   return getMockSubject(code);

@@ -49,12 +49,17 @@ export default async function SubjectPage({
   params: Promise<{ subject: string }>;
 }) {
   const { subject: code } = await params;
-  const subject = await getCatalogSubject(code);
+  const [subject, grouped] = await Promise.all([
+    getCatalogSubject(code),
+    getTopicsGrouped(code),
+  ]);
   if (!subject) notFound();
 
-  const grouped = await getTopicsGrouped(code);
   const hasOge = subject.examTypes.includes("oge");
+  const hasEge = subject.examTypes.includes("ege");
+  // Химия — только ЕГЭ: показываем все темы в одном блоке ЕГЭ
   const egeTopics = hasOge ? grouped.ege : [...grouped.oge, ...grouped.ege];
+  const ogeTopics = hasOge ? grouped.oge : [];
 
   return (
     <PageShell>
@@ -79,6 +84,11 @@ export default async function SubjectPage({
                 {subject.emoji} {subject.title}
               </h1>
               <p className="mt-1 text-white/80">{subject.short}</p>
+              <p className="mt-2 text-sm font-semibold text-white/90">
+                {subject.examTypes.map((t) => (t === "oge" ? "ОГЭ" : "ЕГЭ")).join(" · ")}
+                {" · "}
+                {ogeTopics.length + egeTopics.length} тем
+              </p>
             </div>
             <MasteryBadge mastery={subject.mastery} />
           </div>
@@ -88,26 +98,37 @@ export default async function SubjectPage({
       {hasOge ? (
         <section className="mt-8">
           <h2 className="font-display text-2xl font-semibold">📗 Темы ОГЭ</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">{ogeTopics.length} тем</p>
           <div className="mt-4">
-            {grouped.oge.length > 0 ? (
-              <TopicList topics={grouped.oge} startIndex={0} />
+            {ogeTopics.length > 0 ? (
+              <TopicList topics={ogeTopics} startIndex={0} />
             ) : (
-              <p className="text-sm text-[var(--muted)]">Тем ОГЭ пока нет.</p>
+              <p className="rounded-[12px] border border-dashed border-[var(--line)] px-4 py-6 text-sm text-[var(--muted)]">
+                Тем ОГЭ пока нет. Добавьте их в админке или выполните content-full.sql в Supabase.
+              </p>
             )}
           </div>
         </section>
       ) : null}
 
-      <section className={hasOge ? "mt-10" : "mt-8"}>
-        <h2 className="font-display text-2xl font-semibold">📘 Темы ЕГЭ</h2>
-        <div className="mt-4">
-          {egeTopics.length > 0 ? (
-            <TopicList topics={egeTopics} startIndex={hasOge ? grouped.oge.length : 0} />
-          ) : (
-            <p className="text-sm text-[var(--muted)]">Тем ЕГЭ пока нет.</p>
-          )}
-        </div>
-      </section>
+      {hasEge ? (
+        <section className={hasOge ? "mt-10" : "mt-8"}>
+          <h2 className="font-display text-2xl font-semibold">📘 Темы ЕГЭ</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">{egeTopics.length} тем</p>
+          <div className="mt-4">
+            {egeTopics.length > 0 ? (
+              <TopicList
+                topics={egeTopics}
+                startIndex={hasOge ? ogeTopics.length : 0}
+              />
+            ) : (
+              <p className="rounded-[12px] border border-dashed border-[var(--line)] px-4 py-6 text-sm text-[var(--muted)]">
+                Тем ЕГЭ пока нет. Добавьте их в админке или выполните content-full.sql в Supabase.
+              </p>
+            )}
+          </div>
+        </section>
+      ) : null}
     </PageShell>
   );
 }

@@ -322,34 +322,26 @@ html.dark .pet-stage {
   background: transparent;
   cursor: pointer;
   padding: 0;
-  animation: pet-swim 4s ease-in-out infinite;
-  will-change: transform;
-  backface-visibility: hidden;
+  /* Лёгкая анимация только при hover — без бесконечного swim (меньше лагов) */
+  transition: transform 0.35s ease;
+  contain: layout paint;
+}
+
+.pet-dolphin:hover {
+  transform: translate3d(0, -6px, 0);
 }
 
 .pet-dolphin-body {
   display: block;
-  will-change: transform;
-  backface-visibility: hidden;
 }
 
 .pet-dolphin-body.is-happy {
-  animation: pet-happy 0.9s ease-out;
+  animation: pet-happy 0.7s ease-out;
 }
 
 .pet-dolphin img {
   display: block;
   border-radius: 12px;
-}
-
-@keyframes pet-swim {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(0, -12px, 0);
-  }
 }
 
 @keyframes pet-happy {
@@ -358,13 +350,16 @@ html.dark .pet-stage {
     transform: translate3d(0, 0, 0);
   }
   40% {
-    transform: translate3d(0, -24px, 0);
+    transform: translate3d(0, -16px, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .pet-dolphin,
+  .pet-dolphin:hover,
   .pet-dolphin-body.is-happy {
     animation: none;
+    transition: none;
+    transform: none;
   }
 }

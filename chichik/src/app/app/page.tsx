@@ -43,7 +43,7 @@ export default async function AppHomePage() {
             </p>
             {!fromDb ? (
               <p className="mt-3 text-sm text-[var(--medium)]">
-                Контент пока из макета. После SQL seed предметы подтянутся из базы.
+                Контент из макета. Выполните в Supabase файл content-full.sql — появятся темы ОГЭ и ЕГЭ.
               </p>
             ) : null}
             <div className="mt-5 flex flex-wrap gap-3">

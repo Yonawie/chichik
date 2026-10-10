@@ -24,12 +24,10 @@ export function PetPanel() {
     [state.inventory],
   );
 
-  useEffect(() => {
-    if (ownedFoods.length === 0) return;
-    if (!ownedFoods.some((f) => f.id === selectedFood)) {
-      setSelectedFood(ownedFoods[0].id);
-    }
-  }, [ownedFoods, selectedFood]);
+  const activeFoodId =
+    ownedFoods.some((f) => f.id === selectedFood)
+      ? selectedFood
+      : (ownedFoods[0]?.id ?? selectedFood);
 
   const happyTimer = useRef<number | null>(null);
 
@@ -47,11 +45,11 @@ export function PetPanel() {
   };
 
   const onFeed = () => {
-    if (!selectedFood || ownedFoods.length === 0) {
+    if (!activeFoodId || ownedFoods.length === 0) {
       setMessage("Сначала купите еду в магазине.");
       return;
     }
-    const result = feed(selectedFood);
+    const result = feed(activeFoodId);
     setMessage(result.message);
     if (result.ok) triggerHappy(900);
   };
@@ -62,7 +60,7 @@ export function PetPanel() {
     triggerHappy(1100);
   };
 
-  const selected = getFood(selectedFood);
+  const selected = getFood(activeFoodId);
 
   return (
     <section className="surface overflow-hidden">
@@ -136,7 +134,7 @@ export function PetPanel() {
                   <span className="mb-1 block text-sm font-semibold">Еда из запасов</span>
                   <select
                     className="field"
-                    value={selectedFood}
+                    value={activeFoodId}
                     onChange={(e) => setSelectedFood(e.target.value as FoodId)}
                   >
                     {ownedFoods.map((food) => (

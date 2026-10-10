@@ -1,4 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  encodeGate,
+  GATE_COOKIE,
+  GATE_COOKIE_OPTIONS,
+  parseGate,
+} from "@/lib/auth/gate";
 import { updateSession } from "@/lib/supabase/middleware";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 
@@ -12,7 +18,6 @@ export async function proxy(request: NextRequest) {
   const isAuthPage = pathname === "/login" || pathname === "/register";
 
   if (!isSupabaseConfigured()) {
-    // Без env не блокируем UI-каркас; auth-формы покажут подсказку
     return response;
   }
 
@@ -29,32 +34,43 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && supabase && (isAppRoute || isAdminRoute || isOnboarding)) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role, onboarding_completed")
-      .eq("id", user.id)
-      .maybeSingle();
+  if (user && (isAppRoute || isAdminRoute || isOnboarding)) {
+    let gate = parseGate(request.cookies.get(GATE_COOKIE)?.value);
 
-    if (isAdminRoute && profile?.role !== "admin") {
+    // Only hit profiles when gate cookie is missing (login / first request).
+    if (!gate && supabase) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role, onboarding_completed")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profile) {
+        gate = {
+          onboardingCompleted: Boolean(profile.onboarding_completed),
+          role: profile.role === "admin" ? "admin" : "student",
+        };
+        response.cookies.set(
+          GATE_COOKIE,
+          encodeGate(gate.onboardingCompleted, gate.role),
+          GATE_COOKIE_OPTIONS,
+        );
+      }
+    }
+
+    if (isAdminRoute && gate?.role !== "admin") {
       const url = request.nextUrl.clone();
       url.pathname = "/app";
       return NextResponse.redirect(url);
     }
 
-    if (
-      isAppRoute &&
-      !isAdminRoute &&
-      profile &&
-      !profile.onboarding_completed &&
-      !isOnboarding
-    ) {
+    if (isAppRoute && gate && !gate.onboardingCompleted && !isOnboarding) {
       const url = request.nextUrl.clone();
       url.pathname = "/onboarding";
       return NextResponse.redirect(url);
     }
 
-    if (isOnboarding && profile?.onboarding_completed) {
+    if (isOnboarding && gate?.onboardingCompleted) {
       const url = request.nextUrl.clone();
       url.pathname = "/app";
       return NextResponse.redirect(url);
